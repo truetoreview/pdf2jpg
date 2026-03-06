@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lite PDF to JPG</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        :root { --primary: #2563eb; --bg: #f8fafc; }
+        body { font-family: system-ui, sans-serif; background: var(--bg); margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        
+        /* Header & Controls */
+        header { background: white; padding: 1rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; z-index: 10; }
+        .btn { background: var(--primary); color: white; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .btn:disabled { background: #cbd5e1; cursor: not-allowed; }
+        
+        /* Viewer Area */
+        #viewer { flex: 1; overflow-y: auto; padding: 2rem; display: flex; flex-direction: column; align-items: center; gap: 2rem; }
+        .page-container { position: relative; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.1); line-height: 0; transition: transform 0.2s; }
+        .page-container.selected { outline: 4px solid var(--primary); transform: scale(1.02); }
+        
+        /* Selection Overlay */
+        .select-overlay { position: absolute; top: 10px; left: 10px; z-index: 5; transform: scale(1.5); cursor: pointer; }
+        .page-label { position: absolute; bottom: -25px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #64748b; }
+        
+        canvas { max-width: 100%; height: auto; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <input type="file" id="fileInput" accept="application/pdf" style="display:none">
+        <button class="btn" onclick="document.getElementById('fileInput').click()">Open PDF</button>
+    </div>
+    <div id="status">Select a file to begin</div>
+    <button id="downloadBtn" class="btn" disabled>Save Selected as JPG</button>
+</header>
+
+<div id="viewer">
+    </div>
+
+<script>
+    const pdfjsLib = window['pdfjs-dist/build/pdf'];
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    let pdfDoc = null;
+    let selectedPages = new Set();
+    const viewer = document.getElementById('viewer');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    // 1. Handle File Upload
+    document.getElementById('fileInput').onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        viewer.innerHTML = 'Loading...';
+        selectedPages.clear();
+        updateUI();
+
+        const arrayBuffer = await file.arrayBuffer();
+        pdfDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
+        
+        viewer.innerHTML = '';
+        document.getElementById('status').innerText = `${pdfDoc.numPages} Pages Loaded`;
+
+        // 2. Create lazy placeholders for all pages
+        for (let i = 1; i <= pdfDoc.numPages; i++) {
+            createPageElement(i);
+        }
+    };
+
+    function createPageElement(pageNum) {
+        const container = document.createElement('div');
+        container.className = 'page-container';
+        container.id = `p${pageNum}`;
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'select-overlay';
+        checkbox.onclick = (e) => togglePage(pageNum, container, checkbox.checked);
+
+        const canvas = document.createElement('canvas');
+        const label = document.createElement('div');
+        label.className = 'page-label';
+        label.innerText = `Page ${pageNum}`;
+
+        container.appendChild(checkbox);
+        container.appendChild(canvas);
+        container.appendChild(label);
+        viewer.appendChild(container);
+
+        renderPage(pageNum, canvas);
+    }
+
+    // 3. Render Page (Standard Res for Viewing)
+    async function renderPage(pageNum, canvas) {
+        const page = await pdfDoc.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 0.8 }); // Lower scale for UI performance
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+    }
+
+    function togglePage(num, el, isChecked) {
+        if (isChecked) {
+            selectedPages.add(num);
+            el.classList.add('selected');
+        } else {
+            selectedPages.delete(num);
+            el.classList.remove('selected');
+        }
+        updateUI();
+    }
+
+    function updateUI() {
+        downloadBtn.disabled = selectedPages.size === 0;
+        downloadBtn.innerText = `Save ${selectedPages.size} Page(s) as JPG`;
+    }
+
+    // 4. The "Serial" Saver Logic
+    downloadBtn.onclick = async () => {
+        const sortedPages = Array.from(selectedPages).sort((a, b) => a - b);
+        
+        for (const pageNum of sortedPages) {
+            const page = await pdfDoc.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 2.0 }); // High scale for JPG quality
+            
+            const offscreenCanvas = document.createElement('canvas');
+            const context = offscreenCanvas.getContext('2d');
+            offscreenCanvas.height = viewport.height;
+            offscreenCanvas.width = viewport.width;
+
+            await page.render({ canvasContext: context, viewport: viewport }).promise;
+
+            // Trigger Download
+            const link = document.createElement('a');
+            link.download = `page_${pageNum.toString().padStart(3, '0')}.jpg`;
+            link.href = offscreenCanvas.toDataURL('image/jpeg', 0.9);
+            link.click();
+            
+            // Brief pause to prevent browser from blocking multiple downloads
+            await new Promise(r => setTimeout(r, 200));
+        }
+    };
+</script>
+
+</body>
+  </html>
